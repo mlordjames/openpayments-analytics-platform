@@ -1,30 +1,30 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 from airflow import DAG
-from airflow.sdk import Param, get_current_context, task
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.providers.standard.operators.python import ShortCircuitOperator
+from airflow.sdk import Param, get_current_context, task
 from docker.types import Mount
 
-
 # -------------------------------------------------------------------
-# PATHS (IMPORTANT!)
+# HOST PATHS (EC2 host filesystem)
 # -------------------------------------------------------------------
-# 1) HOST paths (EC2 filesystem): used ONLY for Docker bind mounts.
-# DockerOperator talks to the host Docker daemon via /var/run/docker.sock,
-# so Mount(source=...) MUST exist on the EC2 host.
-HOST_REPO_DIR = os.environ.get("HOST_REPO_DIR", "/opt/data-engineering-zoomcamp")
+# IMPORTANT:
+# - HOST_REPO_DIR must be the ABSOLUTE path to the repo on the EC2 host
+# - DockerOperator bind mounts use HOST paths, not container paths
+HOST_REPO_DIR = os.environ.get("HOST_REPO_DIR", "/opt/openpayments-analytics-platform")
 HOST_DATA_DIR = os.path.join(HOST_REPO_DIR, "data")
 
-# 2) AIRFLOW-CONTAINER paths: used by validate_manifest() task which runs
-# inside Airflow's Python environment/container.
-# In your airflow docker-compose you mounted the repo as:  ..:/opt/project
+# -------------------------------------------------------------------
+# AIRFLOW CONTAINER PATHS
+# -------------------------------------------------------------------
+# In docker-compose we mount the repo root to /opt/project
 AIRFLOW_REPO_DIR = Path("/opt/project")
 AIRFLOW_DATA_DIR = AIRFLOW_REPO_DIR / "data"
 
@@ -35,32 +35,29 @@ CONTAINER_WORKDIR = "/app"
 CONTAINER_DATA_DIR = "/app/data"
 CONTAINER_OUT_ROOT = "/app/data/out"
 CONTAINER_TOTALS_DIR = "/app/data/totals"
+CONTAINER_METADATA_CACHE = "/app/metadata"
 
 DEFAULT_IMAGE = "openpayments:latest"
 DEFAULT_BUCKET = "openpayments-dezoomcamp2026-us-west-1-1f83ec"
 
-# Bind mount host ./data -> container /app/data
 DATA_MOUNT = Mount(
     source=HOST_DATA_DIR,
     target=CONTAINER_DATA_DIR,
     type="bind",
 )
 
-
 with DAG(
-    dag_id="openpayments_phase3_docker_download_validate_upload",
+    dag_id="openpayments_phase3_download_validate_upload",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
-    tags=["openpayments", "phase3", "docker"],
+    tags=["openpayments", "aws", "athena", "phase3"],
     params={
-        # image
         "image": Param(DEFAULT_IMAGE, type="string"),
-
-        # download params
         "year": Param(2023, type="integer", minimum=2018, maximum=2035),
         "max_files": Param(2, type="integer", minimum=0, maximum=100000),
         "ensure_totals": Param(True, type="boolean"),
+        "rescrape_totals": Param(False, type="boolean"),
         "id_workers": Param(10, type="integer", minimum=1, maximum=50),
         "page_workers": Param(5, type="integer", minimum=1, maximum=10),
         "totals_workers": Param(2, type="integer", minimum=1, maximum=20),
@@ -68,8 +65,8 @@ with DAG(
         "totals_country": Param("UNITED STATES", type="string"),
         "resume": Param(True, type="boolean"),
         "verbose": Param(False, type="boolean"),
-
-        # upload params
+        "run_validation": Param(True, type="boolean"),
+        "max_redownload_attempts": Param(3, type="integer", minimum=1, maximum=10),
         "upload_to_s3": Param(False, type="boolean"),
         "bucket": Param(DEFAULT_BUCKET, type="string"),
         "overwrite": Param(False, type="boolean"),
@@ -83,9 +80,6 @@ with DAG(
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
 
-    # ---------------------------------------------------------------
-    # Task 1: DOWNLOAD (runs inside pipeline container)
-    # ---------------------------------------------------------------
     download = DockerOperator(
         task_id="download_in_container",
         image="{{ params.image }}",
@@ -95,12 +89,13 @@ with DAG(
         working_dir=CONTAINER_WORKDIR,
         entrypoint="python",
         command=[
-            "scripts/download_general_payments.py",
+            "src/download_general_payments.py",
             "--dataset", "general-payments",
             "--year", "{{ params.year }}",
             "--out-root", CONTAINER_OUT_ROOT,
             "--totals-dir", CONTAINER_TOTALS_DIR,
             "{{ '--ensure-totals' if params.ensure_totals else '--no-ensure-totals' }}",
+            "{{ '--rescrape-totals' if params.rescrape_totals else '' }}",
             "--max-files", "{{ params.max_files }}",
             "--id-workers", "{{ params.id_workers }}",
             "--page-workers", "{{ params.page_workers }}",
@@ -114,32 +109,14 @@ with DAG(
             "--no-progress",
         ],
         mounts=[DATA_MOUNT],
-        auto_remove="success",  # Airflow 3 requires: 'never' | 'success' | 'force'
+        auto_remove="success",
     )
 
-    # ---------------------------------------------------------------
-    # Task 2: VALIDATE MANIFEST (runs inside Airflow container)
-    # ---------------------------------------------------------------
     @task
     def validate_manifest() -> str:
-        """
-        What is the manifest?
-
-        Your downloader writes a "manifest.json" that summarizes the run:
-        - run id
-        - what files were downloaded
-        - status (completed / completed_with_failures)
-        - paths to key artifacts like report CSV and audits JSONL
-
-        This task just confirms:
-        - manifest exists
-        - status is acceptable
-        - referenced output files exist
-        """
         ctx = get_current_context()
         run_id = ctx["run_id"]
 
-        # IMPORTANT: this path is inside the Airflow container (repo mounted at /opt/project)
         manifest_path = (
             AIRFLOW_DATA_DIR
             / "out"
@@ -150,11 +127,7 @@ with DAG(
         )
 
         if not manifest_path.exists():
-            raise FileNotFoundError(
-                f"Manifest not found: {manifest_path}\n"
-                f"Check that Airflow compose mounts your repo to /opt/project "
-                f"and that the downloader wrote to data/out/metadata/runs/run_id=..."
-            )
+            raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
         manifest = json.loads(manifest_path.read_text())
 
@@ -162,14 +135,10 @@ with DAG(
         if status not in {"completed", "completed_with_failures"}:
             raise ValueError(f"Unexpected manifest status: {status}")
 
-        # The manifest stores these as strings; validate they exist (inside Airflow container view)
-        report_csv = Path(manifest["report_csv"])
-        audits_jsonl = Path(manifest["audits_jsonl"])
-
-        if not report_csv.exists():
-            raise FileNotFoundError(f"report_csv missing: {report_csv}")
-        if not audits_jsonl.exists():
-            raise FileNotFoundError(f"audits_jsonl missing: {audits_jsonl}")
+        for key in ("report_csv", "audits_jsonl"):
+            p = Path(manifest[key])
+            if not p.exists():
+                raise FileNotFoundError(f"{key} missing: {p}")
 
         if int(manifest.get("tasks_total", 0)) <= 0:
             raise ValueError("tasks_total <= 0; expected at least 1 task.")
@@ -179,18 +148,42 @@ with DAG(
     validated_manifest = validate_manifest()
     validated_manifest.set_upstream(download)
 
-    # ---------------------------------------------------------------
-    # Task 3: Gate upload step
-    # ---------------------------------------------------------------
+    should_run_validation = ShortCircuitOperator(
+        task_id="should_run_validation",
+        python_callable=lambda **kwargs: bool(kwargs["params"]["run_validation"]),
+    )
+    should_run_validation.set_upstream(validated_manifest)
+
+    validate_schema = DockerOperator(
+        task_id="validate_schema_in_container",
+        image="{{ params.image }}",
+        docker_url="unix://var/run/docker.sock",
+        api_version="auto",
+        network_mode="bridge",
+        working_dir=CONTAINER_WORKDIR,
+        entrypoint="python",
+        command=[
+            "validation/validate_schema_and_redownload.py",
+            "--dataset", "general-payments",
+            "--year", "{{ params.year }}",
+            "--out-root", CONTAINER_OUT_ROOT,
+            "--metadata-cache", CONTAINER_METADATA_CACHE,
+            "--max-redownload-attempts", "{{ params.max_redownload_attempts }}",
+            "--page-workers", "{{ params.page_workers }}",
+            "{{ '--verbose' if params.verbose else '' }}",
+        ],
+        mounts=[DATA_MOUNT],
+        auto_remove="success",
+    )
+    validate_schema.set_upstream(should_run_validation)
+
     should_upload = ShortCircuitOperator(
         task_id="should_upload",
         python_callable=lambda **kwargs: bool(kwargs["params"]["upload_to_s3"]),
     )
-    should_upload.set_upstream(validated_manifest)
+    should_upload.set_upstream(validate_schema)
+    should_upload.set_upstream(should_run_validation)
 
-    # ---------------------------------------------------------------
-    # Task 4: UPLOAD (runs inside pipeline container)
-    # ---------------------------------------------------------------
     upload = DockerOperator(
         task_id="upload_in_container",
         image="{{ params.image }}",
@@ -200,7 +193,7 @@ with DAG(
         working_dir=CONTAINER_WORKDIR,
         entrypoint="python",
         command=[
-            "scripts/upload_run_to_s3_full_files.py",
+            "src/upload_run_to_s3.py",
             "--bucket", "{{ params.bucket }}",
             "--out-root", CONTAINER_OUT_ROOT,
             "--totals-dir", CONTAINER_TOTALS_DIR,
@@ -217,9 +210,6 @@ with DAG(
     )
     upload.set_upstream(should_upload)
 
-    # ---------------------------------------------------------------
-    # Task 5: Marker (runs inside Airflow container)
-    # ---------------------------------------------------------------
     @task
     def write_marker(manifest_path: str) -> str:
         ctx = get_current_context()
@@ -233,6 +223,7 @@ with DAG(
             "airflow_run_id": run_id,
             "dag_id": ctx["dag"].dag_id,
             "manifest_path": str(mp),
+            "run_validation": bool(params["run_validation"]),
             "upload_to_s3": bool(params["upload_to_s3"]),
             "bucket": str(params["bucket"]),
             "written_at_utc": datetime.utcnow().isoformat() + "Z",
@@ -243,9 +234,10 @@ with DAG(
         return str(out)
 
     marker = write_marker(validated_manifest)
-    marker.set_upstream(should_upload)
+    marker.set_upstream(validate_schema)
     marker.set_upstream(upload)
+    marker.set_upstream(should_upload)
 
-    start >> download >> validated_manifest >> should_upload
-    should_upload >> upload
-    marker >> end
+    start >> download >> validated_manifest >> should_run_validation
+    should_run_validation >> validate_schema >> should_upload
+    should_upload >> upload >> marker >> end

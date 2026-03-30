@@ -10,8 +10,10 @@ COPY docker/requirements.txt /app/requirements.txt
 RUN uv pip install --system -r /app/requirements.txt
 
 # Copy project code needed at runtime
-COPY scripts/ /app/scripts/
+COPY src/ /app/src/
+COPY validation/ /app/validation/
 COPY run_pipeline.py /app/run_pipeline.py
+COPY pyproject.toml /app/pyproject.toml
 
 # Default entrypoint now runs the pipeline runner
 ENTRYPOINT ["python", "/app/run_pipeline.py"]

@@ -87,29 +87,31 @@ with DAG(
         api_version="auto",
         network_mode="bridge",
         working_dir=CONTAINER_WORKDIR,
-        entrypoint="python",
+        entrypoint="/bin/bash",
         command=[
-            "-m",
-            "src.download_general_payments",
-            "--dataset", "general-payments",
-            "--year", "{{ params.year }}",
-            "--out-root", CONTAINER_OUT_ROOT,
-            "--totals-dir", CONTAINER_TOTALS_DIR,
-            "{{ '--ensure-totals' if params.ensure_totals else '--no-ensure-totals' }}",
-            "{{ '--rescrape-totals' if params.rescrape_totals else '' }}",
-            "--max-files", "{{ params.max_files }}",
-            "--id-workers", "{{ params.id_workers }}",
-            "--page-workers", "{{ params.page_workers }}",
-            "--totals-workers", "{{ params.totals_workers }}",
-            "--totals-limit", "{{ params.totals_limit }}",
-            "--totals-country", "{{ params.totals_country }}",
-            "{{ '--resume' if params.resume else '--no-resume' }}",
-            "{{ '--verbose' if params.verbose else '' }}",
-            "--run-id", "{{ run_id }}",
-            "--airflow-mode",
-            "--no-progress",
+            "-lc",
+            f"""
+            python -m src.download_general_payments \
+            --dataset general-payments \
+            --year {{{{ params.year }}}} \
+            --out-root {CONTAINER_OUT_ROOT} \
+            --totals-dir {CONTAINER_TOTALS_DIR} \
+            {{{{ '--ensure-totals' if params.ensure_totals else '--no-ensure-totals' }}}} \
+            --max-files {{{{ params.max_files }}}} \
+            --id-workers {{{{ params.id_workers }}}} \
+            --page-workers {{{{ params.page_workers }}}} \
+            --totals-workers {{{{ params.totals_workers }}}} \
+            --totals-limit {{{{ params.totals_limit }}}} \
+            --totals-country "{{{{ params.totals_country }}}}" \
+            {{{{ '--resume' if params.resume else '--no-resume' }}}} \
+            {{{{ '--verbose' if params.verbose else '' }}}} \
+            --run-id "{{{{ run_id }}}}" \
+            --airflow-mode \
+            --no-progress
+            """,
         ],
         mounts=[DATA_MOUNT],
+        mount_tmp_dir=False,
         auto_remove="success",
     )
 
@@ -162,19 +164,22 @@ with DAG(
         api_version="auto",
         network_mode="bridge",
         working_dir=CONTAINER_WORKDIR,
-        entrypoint="python",
+        entrypoint="/bin/bash",
         command=[
-            "-m",
-            "validation.validate_schema_and_redownload",
-            "--dataset", "general-payments",
-            "--year", "{{ params.year }}",
-            "--out-root", CONTAINER_OUT_ROOT,
-            "--metadata-cache", CONTAINER_METADATA_CACHE,
-            "--max-redownload-attempts", "{{ params.max_redownload_attempts }}",
-            "--page-workers", "{{ params.page_workers }}",
-            "{{ '--verbose' if params.verbose else '' }}",
+            "-lc",
+            f"""
+            python -m validation.validate_schema_and_redownload \
+            --dataset general-payments \
+            --year {{{{ params.year }}}} \
+            --out-root {CONTAINER_OUT_ROOT} \
+            --metadata-cache /app/metadata \
+            --max-redownload-attempts {{{{ params.max_redownload_attempts }}}} \
+            --page-workers {{{{ params.page_workers }}}} \
+            {{{{ '--verbose' if params.verbose else '' }}}}
+            """,
         ],
         mounts=[DATA_MOUNT],
+        mount_tmp_dir=False,
         auto_remove="success",
     )
     validate_schema.set_upstream(should_run_validation)
@@ -193,22 +198,25 @@ with DAG(
         api_version="auto",
         network_mode="bridge",
         working_dir=CONTAINER_WORKDIR,
-        entrypoint="python",
+        entrypoint="/bin/bash",
         command=[
-            "-m",
-            "src.upload_run_to_s3",
-            "--bucket", "{{ params.bucket }}",
-            "--out-root", CONTAINER_OUT_ROOT,
-            "--totals-dir", CONTAINER_TOTALS_DIR,
-            "{{ '--include-metadata' if params.include_metadata else '--no-include-metadata' }}",
-            "{{ '--include-latest-totals' if params.include_latest_totals else '--no-include-latest-totals' }}",
-            "{{ '--overwrite' if params.overwrite else '--no-overwrite' }}",
-            "{{ '--delete-local' if params.delete_local else '' }}",
-            "{{ '--dry-run' if params.dry_run else '' }}",
-            "{{ '--checksum-metadata' if params.checksum_metadata else '' }}",
-            "{{ '--verbose' if params.verbose else '' }}",
+            "-lc",
+            f"""
+            python -m src.upload_run_to_s3 \
+            --bucket "{{{{ params.bucket }}}}" \
+            --out-root {CONTAINER_OUT_ROOT} \
+            --totals-dir {CONTAINER_TOTALS_DIR} \
+            {{{{ '--include-metadata' if params.include_metadata else '--no-include-metadata' }}}} \
+            {{{{ '--include-latest-totals' if params.include_latest_totals else '--no-include-latest-totals' }}}} \
+            {{{{ '--overwrite' if params.overwrite else '--no-overwrite' }}}} \
+            {{{{ '--delete-local' if params.delete_local else '' }}}} \
+            {{{{ '--dry-run' if params.dry_run else '' }}}} \
+            {{{{ '--checksum-metadata' if params.checksum_metadata else '' }}}} \
+            {{{{ '--verbose' if params.verbose else '' }}}}
+            """,
         ],
         mounts=[DATA_MOUNT],
+        mount_tmp_dir=False,
         auto_remove="success",
     )
     upload.set_upstream(should_upload)

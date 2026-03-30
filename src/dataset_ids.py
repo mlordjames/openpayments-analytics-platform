@@ -38,24 +38,26 @@ def fetch_js(session: requests.Session) -> str:
 def extract_general_payment_js_ids(js_text: str) -> Dict[str, str]:
     """
     Returns year -> JS resolver id mapping.
-    These ids are NOT the final download-ready datastore ids.
-    """
-    results: Dict[str, str] = {}
-    year_blocks = re.findall(r"PGYR(\d{4}):\[(.*?)\]", js_text, re.DOTALL)
 
-    for year, block in year_blocks:
-        match = re.search(r'type:"generalPayments",id:"([^"]+)"', block)
-        if match:
-            results[year] = match.group(1)
+    This directly matches the generalPayments object inside each PGYRYYYY block.
+    It is safer than extracting a whole year block and searching inside it.
+    """
+    pattern = re.compile(
+        r'PGYR(?P<year>\d{4})\s*:\s*\[\s*\{\s*type:"generalPayments",\s*id:"(?P<id>[^"]+)"',
+        re.DOTALL,
+    )
+
+    results: Dict[str, str] = {}
+    for m in pattern.finditer(js_text):
+        results[m.group("year")] = m.group("id")
+
+    if not results:
+        raise RuntimeError("Failed to extract any generalPayments dataset ids from index.js")
 
     return results
 
 
 def resolve_to_final_dataset_metadata(session: requests.Session, js_id: str) -> Dict[str, Any]:
-    """
-    Resolve the JS id to the final datastore resource id and keep the full
-    schema-bearing payload so we can cache it for downstream validation.
-    """
     params = {
         "results": "false",
         "count": "true",
@@ -149,11 +151,6 @@ def refresh_general_payment_metadata(cache_dir: Path | str = ".") -> Tuple[Dict[
 
 
 def getdatasetids(cache_dir: Path | str = ".") -> Dict[str, str]:
-    """
-    Returns YEAR -> FINAL dataset_id mapping (download-ready).
-    Uses local cache if fresh, otherwise fetches, resolves, updates cache,
-    and also writes a per-year schema file for downstream validation.
-    """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / CACHE_FILE

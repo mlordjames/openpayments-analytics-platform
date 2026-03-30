@@ -15,6 +15,9 @@ COPY validation/ /app/validation/
 COPY run_pipeline.py /app/run_pipeline.py
 COPY pyproject.toml /app/pyproject.toml
 
+
+ENV PYTHONPATH=/app
+
 # Default entrypoint now runs the pipeline runner
 ENTRYPOINT ["python", "/app/run_pipeline.py"]
 CMD ["--help"]

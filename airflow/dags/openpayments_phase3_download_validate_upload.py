@@ -89,7 +89,8 @@ with DAG(
         working_dir=CONTAINER_WORKDIR,
         entrypoint="python",
         command=[
-            "src/download_general_payments.py",
+            "-m",
+            "src.download_general_payments",
             "--dataset", "general-payments",
             "--year", "{{ params.year }}",
             "--out-root", CONTAINER_OUT_ROOT,
@@ -163,7 +164,8 @@ with DAG(
         working_dir=CONTAINER_WORKDIR,
         entrypoint="python",
         command=[
-            "validation/validate_schema_and_redownload.py",
+            "-m",
+            "validation.validate_schema_and_redownload",
             "--dataset", "general-payments",
             "--year", "{{ params.year }}",
             "--out-root", CONTAINER_OUT_ROOT,
@@ -193,7 +195,8 @@ with DAG(
         working_dir=CONTAINER_WORKDIR,
         entrypoint="python",
         command=[
-            "src/upload_run_to_s3.py",
+            "-m",
+            "src.upload_run_to_s3",
             "--bucket", "{{ params.bucket }}",
             "--out-root", CONTAINER_OUT_ROOT,
             "--totals-dir", CONTAINER_TOTALS_DIR,

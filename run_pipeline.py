@@ -11,8 +11,8 @@ import click
 
 # Import the two CLI entrypoints as callable functions
 # (These are the rewritten Airflow-ready scripts you placed in /scripts)
-from scripts.download_general_payments import download_year  # type: ignore
-from scripts.upload_run_to_s3_full_files import main as upload_main  # type: ignore
+from src.download_general_payments import download_year  # type: ignore
+from src.upload_run_to_s3 import main as upload_main  # type: ignore
 
 
 REPO_ROOT = Path(__file__).resolve().parent

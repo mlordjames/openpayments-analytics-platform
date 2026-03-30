@@ -5,14 +5,11 @@ import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
 
-# -------------------------------------------------------------------
-# CONFIG
-# -------------------------------------------------------------------
 JS_URL = "https://openpaymentsdata.cms.gov/frontend/build/static/js/index.js?ta9low"
 
 HEADERS = {
@@ -23,14 +20,9 @@ HEADERS = {
 
 CACHE_FILE = "dataset_ids_cache.json"
 MAX_CACHE_DAYS = 7
-
-# The resolver endpoint you described
 RESOLVE_URL_TMPL = "https://openpaymentsdata.cms.gov/api/1/datastore/query/{js_id}/0"
 
 
-# -------------------------------------------------------------------
-# HTTP
-# -------------------------------------------------------------------
 def _get_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
@@ -43,17 +35,12 @@ def fetch_js(session: requests.Session) -> str:
     return r.text
 
 
-# -------------------------------------------------------------------
-# STEP 1: extract JS ids per year (not final download ids)
-# -------------------------------------------------------------------
 def extract_general_payment_js_ids(js_text: str) -> Dict[str, str]:
     """
-    Returns: {"2024": "<js_id>", "2023": "<js_id>", ...}
-    These IDs are NOT the final datastore distribution IDs.
+    Returns year -> JS resolver id mapping.
+    These ids are NOT the final download-ready datastore ids.
     """
     results: Dict[str, str] = {}
-
-    # Match each PGYRYYYY block
     year_blocks = re.findall(r"PGYR(\d{4}):\[(.*?)\]", js_text, re.DOTALL)
 
     for year, block in year_blocks:
@@ -64,17 +51,10 @@ def extract_general_payment_js_ids(js_text: str) -> Dict[str, str]:
     return results
 
 
-# -------------------------------------------------------------------
-# STEP 2: resolve JS id -> FINAL datastore query id
-# -------------------------------------------------------------------
-def resolve_to_final_dataset_id(session: requests.Session, js_id: str) -> str:
+def resolve_to_final_dataset_metadata(session: requests.Session, js_id: str) -> Dict[str, Any]:
     """
-    Given the ID scraped from index.js (js_id),
-    call /api/1/datastore/query/{js_id}/0?results=false&count=true&schema=true
-    then take response.json()["query"]["resources"][0]["id"]
-
-    Returns final_id (string)
-    Raises RuntimeError on unexpected response shape.
+    Resolve the JS id to the final datastore resource id and keep the full
+    schema-bearing payload so we can cache it for downstream validation.
     """
     params = {
         "results": "false",
@@ -91,35 +71,37 @@ def resolve_to_final_dataset_id(session: requests.Session, js_id: str) -> str:
         resources = data["query"]["resources"]
         if not resources or "id" not in resources[0]:
             raise KeyError("resources[0].id missing")
-        final_id = resources[0]["id"]
+        final_id = str(resources[0]["id"])
     except Exception as e:
         raise RuntimeError(
             f"Failed to resolve js_id={js_id}. Unexpected response shape. Error={e}"
         ) from e
 
-    return str(final_id)
+    return {
+        "js_id": str(js_id),
+        "final_id": final_id,
+        "count": data.get("count"),
+        "schema": data.get("schema"),
+        "query": data.get("query"),
+        "resolved_at_utc": datetime.utcnow().isoformat() + "Z",
+    }
 
 
-def get_final_general_payment_ids(session: requests.Session) -> Dict[str, str]:
-    """
-    Returns: {"2024": "<final_id>", "2023": "<final_id>", ...}
-    Final IDs are what you can use in:
-      /api/1/datastore/query/<final_id>/download
-    """
+def resolve_to_final_dataset_id(session: requests.Session, js_id: str) -> str:
+    return resolve_to_final_dataset_metadata(session, js_id)["final_id"]
+
+
+def get_final_general_payment_metadata(session: requests.Session) -> Dict[str, Dict[str, Any]]:
     js_text = fetch_js(session)
     year_to_js_id = extract_general_payment_js_ids(js_text)
 
-    year_to_final_id: Dict[str, str] = {}
+    year_to_metadata: Dict[str, Dict[str, Any]] = {}
     for year, js_id in year_to_js_id.items():
-        final_id = resolve_to_final_dataset_id(session, js_id)
-        year_to_final_id[year] = final_id
+        year_to_metadata[year] = resolve_to_final_dataset_metadata(session, js_id)
 
-    return year_to_final_id
+    return year_to_metadata
 
 
-# -------------------------------------------------------------------
-# CACHING
-# -------------------------------------------------------------------
 def _is_cache_fresh(cache_path: Path) -> bool:
     if not cache_path.exists():
         return False
@@ -127,32 +109,83 @@ def _is_cache_fresh(cache_path: Path) -> bool:
     return datetime.now() - mtime < timedelta(days=MAX_CACHE_DAYS)
 
 
+def _schema_cache_path(cache_dir: Path, year: str) -> Path:
+    return cache_dir / "schemas" / "general-payments" / f"year={year}" / "schema.json"
+
+
+def save_schema_cache(cache_dir: Path | str, year: str | int, payload: Dict[str, Any]) -> Path:
+    cache_dir = Path(cache_dir)
+    year_str = str(int(year))
+    out_path = _schema_cache_path(cache_dir, year_str)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out_path
+
+
+def load_schema_cache(cache_dir: Path | str, year: str | int) -> Optional[Dict[str, Any]]:
+    cache_dir = Path(cache_dir)
+    path = _schema_cache_path(cache_dir, str(int(year)))
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def refresh_general_payment_metadata(cache_dir: Path | str = ".") -> Tuple[Dict[str, str], Dict[str, Dict[str, Any]]]:
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / CACHE_FILE
+
+    session = _get_session()
+    year_to_metadata = get_final_general_payment_metadata(session)
+    year_to_id = {year: payload["final_id"] for year, payload in year_to_metadata.items()}
+
+    with cache_path.open("w", encoding="utf-8") as f:
+        json.dump(year_to_id, f, indent=2)
+
+    for year, payload in year_to_metadata.items():
+        save_schema_cache(cache_dir, year, payload)
+
+    return year_to_id, year_to_metadata
+
+
 def getdatasetids(cache_dir: Path | str = ".") -> Dict[str, str]:
     """
     Returns YEAR -> FINAL dataset_id mapping (download-ready).
-    Uses local cache if fresh, otherwise fetches, resolves, and updates cache.
+    Uses local cache if fresh, otherwise fetches, resolves, updates cache,
+    and also writes a per-year schema file for downstream validation.
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / CACHE_FILE
 
-    # Use cache if fresh
     if _is_cache_fresh(cache_path):
         with cache_path.open("r", encoding="utf-8") as f:
             return json.load(f)
 
-    session = _get_session()
-
-    # Fetch & resolve
-    ids = get_final_general_payment_ids(session)
-
-    # Save cache
-    with cache_path.open("w", encoding="utf-8") as f:
-        json.dump(ids, f, indent=2)
-
+    ids, _ = refresh_general_payment_metadata(cache_dir)
     return ids
 
 
+def getdatasetid_and_schema(year: int, cache_dir: Path | str = ".") -> Tuple[str, Optional[Dict[str, Any]], Optional[Path]]:
+    ids = getdatasetids(cache_dir)
+    year_str = str(int(year))
+    if year_str not in ids:
+        raise ValueError(f"No dataset id found for year={year_str}")
+
+    schema_payload = load_schema_cache(cache_dir, year_str)
+    schema_path = _schema_cache_path(Path(cache_dir), year_str)
+
+    if schema_payload is None or not schema_path.exists():
+        _, metadata = refresh_general_payment_metadata(cache_dir)
+        schema_payload = metadata.get(year_str)
+        schema_path = _schema_cache_path(Path(cache_dir), year_str)
+        if schema_payload is not None and not schema_path.exists():
+            save_schema_cache(cache_dir, year_str, schema_payload)
+
+    return ids[year_str], schema_payload, (schema_path if schema_path.exists() else None)
+
+
 if __name__ == "__main__":
-    # Prints final ids that should work with /download endpoint
-    print(json.dumps(getdatasetids(), indent=2))
+    ids, metadata = refresh_general_payment_metadata()
+    print(json.dumps(ids, indent=2))
+    print(f"Saved schema files for years: {', '.join(sorted(metadata.keys()))}")

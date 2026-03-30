@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-records_total.py
+openpayments_companies_totals_by_year.py
 
 Library-first rewrite of your original script, so it can be imported and used by
 your downloader (and still runnable as a CLI if you want later).

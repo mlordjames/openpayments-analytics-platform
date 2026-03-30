@@ -26,19 +26,12 @@ from urllib3.util.retry import Retry
 from src import records_total, dataset_ids
 
 
-# -----------------------------
-# Repo-aware defaults (/src)
-# -----------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_ROOT = REPO_ROOT / "data" / "out"
 DEFAULT_TOTALS_DIR = REPO_ROOT / "data" / "totals"
 DEFAULT_METADATA_CACHE = REPO_ROOT / "metadata"
 
-# -----------------------------
-# CONFIG
-# -----------------------------
 DATASET_CHOICES = ["general-payments"]
-
 
 PAGE_LIMIT = 5000
 CONNECT_TIMEOUT = 60
@@ -61,16 +54,11 @@ DEFAULT_HEADERS = {
 TOTALS_PREFIX = "openpayments_companies_totals_by_year"
 TOTALS_DATE_FMT = "%d-%m-%Y"
 TOTALS_MAX_AGE_DAYS = 10
-
-# Avoid nested thread explosion
 MAX_PAGE_WORKERS_CAP = 5
 
 _thread_local = threading.local()
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -95,11 +83,6 @@ def write_json(path: Path, payload: Dict) -> None:
 
 
 def setup_logging(out_root: Path, run_id: str, verbose: bool, airflow_mode: bool = False) -> Path:
-    """Configure logging.
-
-    - Always writes a run-scoped log file under out_root/metadata/logs
-    - In Airflow mode, avoids clearing existing handlers (Airflow manages task logging).
-    """
     logs_dir = out_root / "metadata" / "logs"
     ensure_dir(logs_dir)
 
@@ -130,9 +113,6 @@ def setup_logging(out_root: Path, run_id: str, verbose: bool, airflow_mode: bool
     return log_path
 
 
-# -----------------------------
-# Totals cache management
-# -----------------------------
 @dataclass
 class TotalsFile:
     path: Path
@@ -242,17 +222,14 @@ def ensure_totals_for_year(
                 df_merged.rename(columns={"error_new": "error"}, inplace=True)
 
         save_totals_df(df_merged, latest.path)
-
         try:
             tmp_new.unlink(missing_ok=True)
         except Exception:
             pass
-
         return latest.path
 
     out_path = totals_file_for_today(totals_dir)
     logging.info("Creating totals file: %s", out_path.name)
-
     records_total.build_totals_json(
         out_path=str(out_path),
         workers=totals_workers,
@@ -266,9 +243,6 @@ def ensure_totals_for_year(
     return out_path
 
 
-# -----------------------------
-# HTTP helpers (thread-local sessions)
-# -----------------------------
 def make_session(pool_size: int) -> requests.Session:
     sess = requests.Session()
     retry = Retry(
@@ -340,14 +314,14 @@ def validate_header_min_cols(path: Path, expected_min_cols: int) -> Tuple[bool, 
                 continue
 
         if not header_line:
-            return (False, "empty_or_binary_file")
+            return False, "empty_or_binary_file"
 
         cols = next(csv.reader([header_line]))
         if len(cols) < expected_min_cols:
-            return (False, f"too_few_columns({len(cols)}<{expected_min_cols})")
-        return (True, "")
+            return False, f"too_few_columns({len(cols)}<{expected_min_cols})"
+        return True, ""
     except Exception as e:
-        return (False, f"validation_error:{e}")
+        return False, f"validation_error:{e}"
 
 
 def build_params(company_id: str, offset: int) -> dict:
@@ -368,11 +342,11 @@ def request_with_manual_backoff(session: requests.Session, url: str, params: dic
             resp = session.get(url, params=params, stream=True, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
         except requests.exceptions.RequestException as e:
             last_exc = e
-            time.sleep(MANUAL_BACKOFF_BASE * (attempt**1.3))
+            time.sleep(MANUAL_BACKOFF_BASE * (attempt ** 1.3))
             continue
 
         if resp.status_code in (403, 429):
-            time.sleep(MANUAL_BACKOFF_BASE * (attempt**1.6))
+            time.sleep(MANUAL_BACKOFF_BASE * (attempt ** 1.6))
             continue
 
         return resp
@@ -382,9 +356,6 @@ def request_with_manual_backoff(session: requests.Session, url: str, params: dic
     raise RuntimeError("request_with_manual_backoff exhausted without response")
 
 
-# -----------------------------
-# Paths + manifest
-# -----------------------------
 def get_year_dir(out_root: Path, dataset: str, year: int) -> Path:
     return out_root / f"dataset={dataset}" / f"year={year}"
 
@@ -405,9 +376,6 @@ def build_run_id(dataset: str, year: int, dataset_id: str, totals_path: Path) ->
     return hashlib.sha1(raw).hexdigest()[:12]
 
 
-# -----------------------------
-# Download routines
-# -----------------------------
 def download_small_sequential(
     *,
     session: requests.Session,
@@ -419,9 +387,8 @@ def download_small_sequential(
 ) -> Tuple[str, int, bool, str, Optional[Dict]]:
     final_path = year_dir / f"company_id={company_id}.csv"
 
-    # Resume behavior: skip if already valid
     if resume and final_path.exists() and final_path.stat().st_size > 0:
-        ok, reason = validate_header_min_cols(final_path, EXPECTED_MIN_COLS)
+        ok, _ = validate_header_min_cols(final_path, EXPECTED_MIN_COLS)
         if ok:
             audit = {
                 "company_id": company_id,
@@ -431,7 +398,7 @@ def download_small_sequential(
                 "sha256": sha256_file(final_path),
                 "mode": "resume_skip_existing",
             }
-            return (company_id, year, True, "skipped_existing_valid", audit)
+            return company_id, year, True, "skipped_existing_valid", audit
 
     tmp_path = final_path.with_suffix(".csv.part")
     if tmp_path.exists():
@@ -452,11 +419,10 @@ def download_small_sequential(
                 tmp_path.unlink()
             except Exception:
                 pass
-            return (company_id, year, False, f"HTTP {resp.status_code} at offset {offset}", None)
+            return company_id, year, False, f"HTTP {resp.status_code} at offset {offset}", None
 
         mode = "w" if offset == 0 else "a"
         enc = "utf-8-sig" if offset == 0 else "utf-8"
-
         header_seen = False
         data_lines = 0
 
@@ -474,7 +440,6 @@ def download_small_sequential(
                 data_lines += 1
 
         truncate_trailing_partial_row(tmp_path)
-
         if data_lines == 0:
             break
 
@@ -487,7 +452,7 @@ def download_small_sequential(
             tmp_path.unlink()
         except Exception:
             pass
-        return (company_id, year, False, "no_results_header_only", None)
+        return company_id, year, False, "no_results_header_only", None
 
     ok, reason = validate_header_min_cols(tmp_path, EXPECTED_MIN_COLS)
     if not ok:
@@ -495,10 +460,9 @@ def download_small_sequential(
             tmp_path.unlink()
         except Exception:
             pass
-        return (company_id, year, False, f"validation_failed:{reason}", None)
+        return company_id, year, False, f"validation_failed:{reason}", None
 
     tmp_path.replace(final_path)
-
     elapsed = time.perf_counter() - start
     audit = {
         "company_id": company_id,
@@ -510,7 +474,7 @@ def download_small_sequential(
         "elapsed_seconds": round(elapsed, 4),
         "mode": "small_sequential",
     }
-    return (company_id, year, True, f"downloaded_rows~{total_data_rows}", audit)
+    return company_id, year, True, f"downloaded_rows~{total_data_rows}", audit
 
 
 def merge_parts(parts: List[Path], final_path: Path) -> Tuple[bool, str]:
@@ -529,11 +493,11 @@ def merge_parts(parts: List[Path], final_path: Path) -> Tuple[bool, str]:
                 final_path.unlink()
             except Exception:
                 pass
-            return (False, f"validation_failed:{reason}")
+            return False, f"validation_failed:{reason}"
 
-        return (True, "merged_ok")
+        return True, "merged_ok"
     except Exception as e:
-        return (False, f"merge_error:{e}")
+        return False, f"merge_error:{e}"
 
 
 def fetch_page_to_partfile(
@@ -547,7 +511,7 @@ def fetch_page_to_partfile(
 ) -> Tuple[bool, str, int]:
     resp = request_with_manual_backoff(session, url, build_params(company_id, offset))
     if resp.status_code != 200:
-        return (False, f"HTTP {resp.status_code}", 0)
+        return False, f"HTTP {resp.status_code}", 0
 
     if part_path.exists():
         part_path.unlink()
@@ -575,9 +539,9 @@ def fetch_page_to_partfile(
             part_path.unlink()
         except Exception:
             pass
-        return (True, "empty", 0)
+        return True, "empty", 0
 
-    return (True, "ok", data_lines)
+    return True, "ok", data_lines
 
 
 def download_big_parallel_pages(
@@ -594,7 +558,7 @@ def download_big_parallel_pages(
     final_path = year_dir / f"company_id={company_id}.csv"
 
     if resume and final_path.exists() and final_path.stat().st_size > 0:
-        ok, reason = validate_header_min_cols(final_path, EXPECTED_MIN_COLS)
+        ok, _ = validate_header_min_cols(final_path, EXPECTED_MIN_COLS)
         if ok:
             audit = {
                 "company_id": company_id,
@@ -604,17 +568,15 @@ def download_big_parallel_pages(
                 "sha256": sha256_file(final_path),
                 "mode": "resume_skip_existing",
             }
-            return (company_id, year, True, "skipped_existing_valid", audit)
+            return company_id, year, True, "skipped_existing_valid", audit
 
     start = time.perf_counter()
-
     pages = int(math.ceil(expected_total / PAGE_LIMIT))
     if pages <= 0:
-        return (company_id, year, False, "bad_expected_total", None)
+        return company_id, year, False, "bad_expected_total", None
 
     parts_root = year_dir / "_parts" / company_id
     ensure_dir(parts_root)
-
     part_paths = [parts_root / f"part_{i:06d}.csv" for i in range(pages)]
     offsets = [i * PAGE_LIMIT for i in range(pages)]
 
@@ -635,15 +597,15 @@ def download_big_parallel_pages(
         for fut in as_completed(futs):
             ok, msg, data_lines = fut.result()
             if not ok:
-                return (company_id, year, False, f"page_failed:{msg}", None)
+                return company_id, year, False, f"page_failed:{msg}", None
             total_data_rows += data_lines
 
     if total_data_rows == 0:
-        return (company_id, year, False, "no_results_all_pages_empty", None)
+        return company_id, year, False, "no_results_all_pages_empty", None
 
     ok, msg = merge_parts(part_paths, final_path)
     if not ok:
-        return (company_id, year, False, msg, None)
+        return company_id, year, False, msg, None
 
     elapsed = time.perf_counter() - start
     audit = {
@@ -657,7 +619,7 @@ def download_big_parallel_pages(
         "mode": "big_parallel_pages",
         "pages": int(pages),
     }
-    return (company_id, year, True, f"downloaded_pages={pages}_rows~{total_data_rows}", audit)
+    return company_id, year, True, f"downloaded_pages={pages}_rows~{total_data_rows}", audit
 
 
 def _parse_slice(slice_str: Optional[str]) -> Optional[slice]:
@@ -675,15 +637,19 @@ def _parse_slice(slice_str: Optional[str]) -> Optional[slice]:
     return slice(start, end)
 
 
-def resolve_dataset_id(dataset: str, year: int, cache_dir: Path = DEFAULT_METADATA_CACHE) -> str:
-    """Resolve the datastore dataset_id for a given dataset/year.
-
-    Airflow note:
-      - This function must be called at task-runtime only (no network calls at module import).
-    """
+def resolve_dataset_id_and_schema(
+    dataset: str,
+    year: int,
+    cache_dir: Path = DEFAULT_METADATA_CACHE,
+) -> Tuple[str, Optional[Dict], Optional[Path]]:
     if dataset != "general-payments":
         raise ValueError(f"Unsupported dataset '{dataset}'. Supported: {DATASET_CHOICES}")
+    return dataset_ids.getdatasetid_and_schema(year=year, cache_dir=str(cache_dir))
 
+
+def resolve_dataset_id(dataset: str, year: int, cache_dir: Path = DEFAULT_METADATA_CACHE) -> str:
+    if dataset != "general-payments":
+        raise ValueError(f"Unsupported dataset '{dataset}'. Supported: {DATASET_CHOICES}")
     mapping = dataset_ids.getdatasetids(cache_dir=str(cache_dir))
     key_str = str(int(year))
     if key_str in mapping:
@@ -717,7 +683,7 @@ def download_year(
 ) -> Path:
     page_workers = min(int(page_workers), MAX_PAGE_WORKERS_CAP)
 
-    dataset_id = resolve_dataset_id(dataset, year)
+    dataset_id, schema_payload, schema_path = resolve_dataset_id_and_schema(dataset, year)
     base_url = f"https://openpaymentsdata.cms.gov/api/1/datastore/query/{dataset_id}/download"
 
     totals_path: Optional[Path] = None
@@ -745,12 +711,10 @@ def download_year(
 
     started_at = utc_now_iso()
     run_start_perf = time.perf_counter()
-
     run_dir = get_run_dir(out_root, run_id)
     ensure_dir(run_dir)
     manifest_path = run_dir / "manifest.json"
 
-    # Write an initial "running" manifest (useful for crash recovery)
     write_json(
         manifest_path,
         {
@@ -761,6 +725,8 @@ def download_year(
             "status": "running",
             "started_at_utc": started_at,
             "totals_file": str(totals_path),
+            "schema_file": str(schema_path) if schema_path else None,
+            "schema_cached": bool(schema_payload is not None),
         },
     )
 
@@ -772,7 +738,6 @@ def download_year(
     temp = df[["company_id", total_col]].copy()
     temp[total_col] = temp[total_col].fillna(0).astype(int)
     temp = temp[temp[total_col] > 0].sort_values("company_id")
-
     tasks: List[Tuple[str, int]] = [(r["company_id"], int(r[total_col])) for _, r in temp.iterrows()]
 
     if slice_str:
@@ -786,18 +751,14 @@ def download_year(
 
     year_dir = get_year_dir(out_root, dataset, year)
     ensure_dir(year_dir)
-
     pool_size = max(id_workers, page_workers) * 3
-
     results_rows: List[Dict] = []
     audits_ok: List[Dict] = []
 
     def _job(company_id: str, expected_total: int):
         session = get_thread_session(pool_size=pool_size)
         if expected_total <= PAGE_LIMIT:
-            return download_small_sequential(
-                session=session, url=base_url, company_id=company_id, year=year, year_dir=year_dir, resume=resume
-            )
+            return download_small_sequential(session=session, url=base_url, company_id=company_id, year=year, year_dir=year_dir, resume=resume)
         return download_big_parallel_pages(
             session=session,
             url=base_url,
@@ -811,7 +772,6 @@ def download_year(
 
     with ThreadPoolExecutor(max_workers=id_workers) as ex:
         futs = {ex.submit(_job, cid, exp): (cid, exp) for cid, exp in tasks}
-
         for fut in tqdm(as_completed(futs), total=len(futs), desc=f"Downloading ({dataset}:{year})", unit="job", disable=(airflow_mode or no_progress)):
             cid, expected_total = futs[fut]
             try:
@@ -844,7 +804,6 @@ def download_year(
 
     ok_count = sum(1 for r in results_rows if r.get("ok") is True)
     fail_count = len(results_rows) - ok_count
-
     finished_at = utc_now_iso()
     elapsed_total = time.perf_counter() - run_start_perf
 
@@ -861,20 +820,22 @@ def download_year(
         "tasks_ok": int(ok_count),
         "tasks_failed": int(fail_count),
         "totals_file": str(totals_path),
+        "schema_file": str(schema_path) if schema_path else None,
+        "schema_cached": bool(schema_payload is not None),
         "year_dir": str(year_dir),
         "report_csv": str(report_path),
         "audits_jsonl": str(audits_path),
-        "notes": {"page_workers_capped_to": MAX_PAGE_WORKERS_CAP, "expected_min_cols": EXPECTED_MIN_COLS, "page_limit": PAGE_LIMIT},
+        "notes": {
+            "page_workers_capped_to": MAX_PAGE_WORKERS_CAP,
+            "expected_min_cols": EXPECTED_MIN_COLS,
+            "page_limit": PAGE_LIMIT,
+        },
     }
     write_json(manifest_path, final_manifest)
-
     logging.info("Manifest saved: %s", manifest_path.resolve())
     return manifest_path
 
 
-# -----------------------------
-# CLI
-# -----------------------------
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--dataset", type=click.Choice(DATASET_CHOICES, case_sensitive=False), required=True)
 @click.option("--year", type=int, required=True)

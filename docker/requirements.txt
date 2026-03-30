@@ -1,0 +1,7 @@
+boto3
+botocore
+pandas
+requests
+tqdm
+urllib3
+click

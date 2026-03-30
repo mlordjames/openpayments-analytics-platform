@@ -1,0 +1,119 @@
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+site/
+.eggs/
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# -------------------------
+# Environment / secrets
+# -------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# -------------------------
+# Logs
+# -------------------------
+logs/
+*.log
+airflow/logs/
+
+# -------------------------
+# Local runtime data
+# -------------------------
+data/out/
+data/totals/
+data/tmp/
+tmp/
+temp/
+
+# Optional sample/raw local files
+*.csv
+*.parquet
+*.jsonl
+
+# Keep intentional docs/sample assets if needed
+!data/sample/
+!data/sample/**
+!docs/screenshots/
+!docs/screenshots/**
+
+# -------------------------
+# Airflow
+# -------------------------
+airflow/.env
+airflow/standalone_admin_password.txt
+airflow/webserver_config.py
+
+# -------------------------
+# Terraform
+# -------------------------
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/*.tfvars.json
+terraform/crash.log
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# -------------------------
+# Docker
+# -------------------------
+.docker/
+docker/*.env
+
+# -------------------------
+# Package / dependency locks
+# -------------------------
+uv.lock
+
+# -------------------------
+# OS / editor
+# -------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -------------------------
+# Project-specific cleanup
+# -------------------------
+zoomcamp_5day_guides_v2/
+pipeline_diagram_mermaid.md
+scripts/__pycache__/
+src/__pycache__/

@@ -162,24 +162,59 @@ def getdatasetids(cache_dir: Path | str = ".") -> Dict[str, str]:
     ids, _ = refresh_general_payment_metadata(cache_dir)
     return ids
 
+def get_general_payment_js_id_for_year(session: requests.Session, year: int | str) -> str:
+    js_text = fetch_js(session)
+    year_to_js_id = extract_general_payment_js_ids(js_text)
+    year_str = str(int(year))
+
+    if year_str not in year_to_js_id:
+        raise ValueError(f"No generalPayments JS id found for year={year_str}")
+
+    return year_to_js_id[year_str]
 
 def getdatasetid_and_schema(year: int, cache_dir: Path | str = ".") -> Tuple[str, Optional[Dict[str, Any]], Optional[Path]]:
-    ids = getdatasetids(cache_dir)
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
     year_str = str(int(year))
-    if year_str not in ids:
-        raise ValueError(f"No dataset id found for year={year_str}")
+    cache_path = cache_dir / CACHE_FILE
 
+    # Try fresh id cache first
+    ids: Dict[str, str] = {}
+    if _is_cache_fresh(cache_path):
+        try:
+            ids = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            ids = {}
+
+    # Try schema cache first
     schema_payload = load_schema_cache(cache_dir, year_str)
-    schema_path = _schema_cache_path(Path(cache_dir), year_str)
+    schema_path = _schema_cache_path(cache_dir, year_str)
 
-    if schema_payload is None or not schema_path.exists():
-        _, metadata = refresh_general_payment_metadata(cache_dir)
-        schema_payload = metadata.get(year_str)
-        schema_path = _schema_cache_path(Path(cache_dir), year_str)
-        if schema_payload is not None and not schema_path.exists():
-            save_schema_cache(cache_dir, year_str, schema_payload)
+    # If both id + schema already exist, return immediately
+    if year_str in ids and schema_payload is not None and schema_path.exists():
+        return ids[year_str], schema_payload, schema_path
 
-    return ids[year_str], schema_payload, (schema_path if schema_path.exists() else None)
+    # Otherwise resolve ONLY the requested year
+    session = _get_session()
+    js_id = get_general_payment_js_id_for_year(session, year_str)
+    metadata = resolve_to_final_dataset_metadata(session, js_id)
+
+    # Update id cache without rebuilding all years
+    if cache_path.exists():
+        try:
+            ids = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            ids = {}
+    ids[year_str] = metadata["final_id"]
+    cache_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+
+    # Save schema cache for this year
+    save_schema_cache(cache_dir, year_str, metadata)
+    schema_payload = metadata
+    schema_path = _schema_cache_path(cache_dir, year_str)
+
+    return metadata["final_id"], schema_payload, schema_path
 
 
 if __name__ == "__main__":

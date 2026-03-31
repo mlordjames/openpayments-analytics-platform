@@ -115,6 +115,19 @@ with DAG(
         auto_remove="success",
     )
 
+    def remap_pipeline_path_to_airflow(path_str: str) -> Path:
+        """
+        Manifest paths are written inside the pipeline container using /app/...
+        But validate_manifest runs inside the Airflow container where the repo is mounted at /opt/project.
+        """
+        p = Path(path_str)
+
+        path_str = str(p)
+        if path_str.startswith("/app/data/"):
+            return AIRFLOW_REPO_DIR / path_str.replace("/app/", "", 1)
+
+        return p
+
     @task
     def validate_manifest() -> str:
         ctx = get_current_context()
@@ -139,7 +152,7 @@ with DAG(
             raise ValueError(f"Unexpected manifest status: {status}")
 
         for key in ("report_csv", "audits_jsonl"):
-            p = Path(manifest[key])
+            p = remap_pipeline_path_to_airflow(manifest[key])
             if not p.exists():
                 raise FileNotFoundError(f"{key} missing: {p}")
 

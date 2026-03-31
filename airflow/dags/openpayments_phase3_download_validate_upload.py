@@ -240,20 +240,19 @@ with DAG(
         run_id = ctx["run_id"]
         params = ctx["params"]
 
-        mp = Path(manifest_path)
-        run_dir = mp.parent
-
         marker = {
             "airflow_run_id": run_id,
             "dag_id": ctx["dag"].dag_id,
-            "manifest_path": str(mp),
-            "run_validation": bool(params["run_validation"]),
+            "manifest_path": str(manifest_path),
             "upload_to_s3": bool(params["upload_to_s3"]),
             "bucket": str(params["bucket"]),
             "written_at_utc": datetime.utcnow().isoformat() + "Z",
         }
 
-        out = run_dir / "airflow_marker.json"
+        marker_dir = Path("/opt/airflow/logs/openpayments_markers")
+        marker_dir.mkdir(parents=True, exist_ok=True)
+
+        out = marker_dir / f"{run_id}.json"
         out.write_text(json.dumps(marker, indent=2))
         return str(out)
 

@@ -11,5 +11,6 @@ dependencies = [
     "requests",
     "tqdm",
     "click",
-    "urllib3"
+    "urllib3",
+    "streamlit>=1.57.0",
 ]

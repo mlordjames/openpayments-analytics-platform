@@ -1,0 +1,8 @@
+aws_region              = "us-east-1"
+project_name            = "openpayments"
+glue_database_name      = "openpayments"
+athena_workgroup_name   = "openpayments-wg"
+athena_results_prefix   = "query-results"
+
+# Optional:
+# athena_results_bucket_name = "your-unique-athena-results-bucket-name"

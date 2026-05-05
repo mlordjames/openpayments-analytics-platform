@@ -2,6 +2,8 @@
 
 An end-to-end batch analytics project built on AWS around the **CMS Open Payments – General Payments** dataset for **2023 and 2024**.
 
+**CMS dataset:** https://openpaymentsdata.cms.gov/datasets
+
 This project ingests raw public payment data, validates it, uploads it to Amazon S3, exposes it through Athena using the AWS Glue Data Catalog, and serves analytical outputs in a live Streamlit dashboard. Workflow orchestration is handled with Apache Airflow running on EC2, and infrastructure setup is partially supported with Terraform for reproducibility and documentation.
 
 ---
@@ -55,6 +57,9 @@ The project follows this flow:
 - **Amazon Athena** as the cloud query layer
 - **Streamlit** for the analytical dashboard
 - **Terraform** for reproducibility/documentation of parts of the infrastructure
+
+### Architecture reference
+The project architecture is also reflected in the workflow and platform screenshots captured during implementation.
 
 ---
 
@@ -149,6 +154,11 @@ The Athena raw table is partitioned by `year`, which matches the actual S3 folde
 
 This makes sense for the upstream analytical queries because the project repeatedly compares one year against the other and supports year-based filtering naturally.
 
+### Storage evidence
+![S3 parent prefixes](docs/screenshots/s3-parents.png)
+
+![S3 raw year paths](docs/screenshots/s3-raws-paths.png)
+
 ---
 
 ## What is implemented
@@ -184,6 +194,17 @@ The DAG shown in the project includes multiple steps such as:
 
 This gives the project a real orchestrated batch workflow rather than a manual one-script demo.
 
+#### Airflow evidence
+![Airflow CLI / containers](docs/screenshots/airflow%20cli.png)
+
+![Airflow UI](docs/screenshots/airflow%20gui.png)
+
+![Airflow DAG graph](docs/screenshots/airflowdag.png)
+
+![Airflow DAG full view](docs/screenshots/airflowdagfull.png)
+
+![OpenPayments phase 3 graph](docs/screenshots/openpayments_phase3_download_validate_upload-graph.png)
+
 ### 4. Cloud storage in S3
 Raw data and metadata are stored in S3, and Athena query results are written back to the same project bucket under a dedicated prefix.
 
@@ -199,6 +220,11 @@ Implemented SQL files:
 
 Additional guide:
 - [`athena_glue_manual_sql_guide.md`](data_pipeline/sql/athena/athena_glue_manual_sql_guide.md)
+
+#### Athena evidence
+![Athena query result 1](docs/screenshots/athena-query-1.png)
+
+![Athena query result 2](docs/screenshots/athena-query-2.png)
 
 ### 6. Analytical SQL layer
 The dashboard is powered from Athena using analytical SQL over the partitioned raw table. This includes:
@@ -218,6 +244,17 @@ A live Streamlit dashboard queries Athena directly and displays:
 
 Relevant file:
 - `app/dashboard/app.py`
+
+#### Dashboard evidence
+![Streamlit dashboard top](docs/screenshots/streamlit-1.png)
+
+![Streamlit dashboard lower section](docs/screenshots/streamlit-2.png)
+
+### 8. Dockerized execution environment
+The project uses Docker to standardize the ingestion runtime and support Airflow container execution.
+
+#### Docker evidence
+![Docker build](docs/screenshots/docker.png)
 
 ---
 
@@ -283,7 +320,7 @@ A few quick observations from the 2023–2024 analysis:
 - The platform processed **29.97M+ payment records** across the two selected years.
 - **2024 exceeded 2023** in payment count, total payment amount, and average payment amount.
 - Total reported payment value across both years was approximately **$5.95B**.
-- The most significant payment categories included **Royalty or License**, **Compensation for services other than consulting**, **Consulting   Fee**, and **Food and Beverage**.
+- The most significant payment categories included **Royalty or License**, **Compensation for services other than consulting**, **Consulting Fee**, and **Food and Beverage**.
 - The top companies by total payment amount included **AbbVie, Stryker, Medtronic, Arthrex, and Zimmer Biomet**.
 - Monthly payment activity showed consistent variation across both years, making the dataset suitable for time-based comparison and dashboard analysis.
 
@@ -370,46 +407,11 @@ Relevant files:
 - `terraform/main.tf`
 - `terraform/variables.tf`
 
-This project’s working cloud story is centered on:
+This project's working cloud story is centered on:
 - S3 bucket structure
 - Athena query output location
 - Glue/Athena query layer
 - EC2-hosted Airflow environment
-
----
-
-## Screenshots / Evidence
-
-### S3 bucket structure
-![S3 parent prefixes](docs/screenshots/s3-parents.png)
-
-### S3 raw dataset path with year partitions
-![S3 raw year paths](docs/screenshots/s3-raws-paths.png)
-
-### Athena query layer
-![Athena query result 1](docs/screenshots/athena-query-1.png)
-
-![Athena query result 2](docs/screenshots/athena-query-2.png)
-
-### Airflow environment
-![Airflow CLI / containers](docs/screenshots/airflow%20cli.png)
-
-![Airflow UI](docs/screenshots/airflow%20gui.png)
-
-### Airflow DAG runs
-![Airflow DAG graph](docs/screenshots/airflowdag.png)
-
-![Airflow DAG full view](docs/screenshots/airflowdagfull.png)
-
-![OpenPayments phase 3 graph](docs/screenshots/openpayments_phase3_download_validate_upload-graph.png)
-
-### Docker build evidence
-![Docker build](docs/screenshots/docker.png)
-
-### Streamlit dashboard
-![Streamlit dashboard top](docs/screenshots/streamlit-1.png)
-
-![Streamlit dashboard lower section](docs/screenshots/streamlit-2.png)
 
 ---
 
@@ -432,6 +434,10 @@ Main files:
 Additional project materials:
 - [`data_pipeline/sql/athena/README.md`](data_pipeline/sql/athena/README.md)
 - [`data_pipeline/sql/athena/athena_glue_manual_sql_guide.md`](data_pipeline/sql/athena/athena_glue_manual_sql_guide.md)
+
+### Public learning links
+- [LinkedIn post: Zoomcamp project update](https://www.linkedin.com/posts/mlordjames_zoomcamp-dezoomcamp-activity-7429540283752574976-i0N8)
+- [LinkedIn post: GitHub / Data Zoomcamp project share](https://www.linkedin.com/posts/mlordjames_github-mlordjamesdata-zoomcamp-this-is-activity-7430643331833053184-LrnI)
 
 ---
 
